@@ -46,7 +46,7 @@ int kvs_connect(char const *req_pipe_path, char const *resp_pipe_path,
   req_fd = open(req_pipe_path, O_RDWR);
   resp_fd = open(resp_pipe_path, O_RDWR);
   notif_fd = open(notif_pipe_path, O_RDWR);
-
+  await_response();
 
 
   return 0;
@@ -85,4 +85,43 @@ int kvs_unsubscribe(const char *key, const char *req_pipe_path) {
   memset(msg + strlen(msg), "\0", MAX_STRING_SIZE - strlen(msg));
   write_all(req_fd, msg, MAX_STRING_SIZE+1);
   return 0;
+}
+
+int await_response(){
+  char* msg;
+  char* msg1; 
+  char* msg2;
+  while(1){
+    char buffer[2];
+    if(read_all(resp_fd, buffer, 2) == -1)
+      return -1;
+    if(buffer[0] == OP_CODE_CONNECT){
+      msg1 = buffer[1];
+      msg2 = "connect";
+      break;
+    }
+    if(buffer[0] == OP_CODE_DISCONNECT){
+      msg1 = buffer[1];
+      msg2 = "disconnect";
+      break;
+    }
+    if(buffer[0] == OP_CODE_SUBSCRIBE){
+      char key[MAX_STRING_SIZE];
+      read_all(resp_fd, key, MAX_STRING_SIZE);
+      printf("Subscribed to key: %s\n", key);
+      msg1 = buffer[1];
+      msg2 = "subscribe";
+      break;
+    }
+    if(buffer[0] == OP_CODE_UNSUBSCRIBE){
+      char key[MAX_STRING_SIZE];
+      read_all(resp_fd, key, MAX_STRING_SIZE);
+      printf("Unsubscribed from key: %s\n", key);
+      msg1 = buffer[1];
+      msg2 = "unsubscribe";
+      break;
+    }
+  }
+  fprintf(stdout, "“Server returned %s for operation:%s", msg1, msg2)
+  buffer[0] = '\0';
 }

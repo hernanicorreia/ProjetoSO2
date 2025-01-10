@@ -31,6 +31,9 @@ int main(int argc, char *argv[]) {
 
   kvs_connect(req_pipe_path, resp_pipe_path, argv[2], notif_pipe_path);
 
+
+  int flag = 0;
+
   while (1) {
     switch (get_next(STDIN_FILENO)) {
     case CMD_DISCONNECT:
@@ -52,7 +55,7 @@ int main(int argc, char *argv[]) {
       if (kvs_subscribe(keys[0])) {
         fprintf(stderr, "Command subscribe failed\n");
       }
-
+      flag = 1;
       break;
 
     case CMD_UNSUBSCRIBE:
@@ -61,7 +64,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Invalid command. See HELP for usage\n");
         continue;
       }
-
+      flag = 1;
       if (kvs_unsubscribe(keys[0])) {
         fprintf(stderr, "Command subscribe failed\n");
       }
@@ -90,6 +93,11 @@ int main(int argc, char *argv[]) {
     case EOC:
       // input should end in a disconnect, or it will loop here forever
       break;
+    }
+    if(flag){
+      await_response();
+      flag = 0;
+      continue;
     }
   }
 }

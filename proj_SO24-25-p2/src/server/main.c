@@ -27,6 +27,33 @@ size_t active_backups = 0; // Number of active backups
 size_t max_backups;        // Maximum allowed simultaneous backups
 size_t max_threads;        // Maximum allowed simultaneous threads
 char *jobs_directory = NULL;
+char reg_pipe[MAX_PIPE_PATH_LENGTH] = "";
+int* session_threads[MAX_SESSION_COUNT];
+
+
+
+
+void* look_for_session(void* arg){
+  (void)arg; //unused argument
+  while(1){
+    pthread_mutex_lock(&queue_lock); //create lock for the queue
+    if(flag == 1 && job_head == NULL){ //declare flag as a global variable
+      pthread_mutex_unlock(&queue_lock);
+      return NULL;
+    }
+    while(job_head == NULL && flag == 0){ 
+      pthread_cond_wait(&queue_cond, &queue_lock);
+    }
+    Job_Queue* job = pop(); //adapt the queue to work with the array(a função pop ia à lista e tirava de lá o primeiro elemento, agora podes só ter um counter global e dar return a esse indice do array de sessões, já que este nunca vai ficar"sem espaço")
+    pthread_mutex_unlock(&queue_lock);
+    //faz a thread ler repetidamente o pipe de requests e quando ler algo faz o parse (só precisa de ler um bite de cada vez para ver se é o op_code)
+    //se for um op_code válido, faz o parse e executa a função correspondente
+
+  }
+  return NULL;
+}
+
+
 
 int filter_job_files(const struct dirent *entry) {
   const char *dot = strrchr(entry->d_name, '.');
@@ -257,7 +284,16 @@ static void dispatch_threads(DIR *dir) {
     }
   }
 
-  // ler do FIFO de registo
+  //BIG BOSS
+  for(int i = 0; i < MAX_SESSION_COUNT; i++){
+    pthread_create(&session_threads[i], NULL, look_for_session(), NULL);
+  }
+
+  //O BIG BOSS tem de ir pondo a info das sessões no array de threads, e as threads vão lendo o pipe de requests e executando as funções correspondentes
+  //Ele vai funcionar como o loop que metia os jobs na job_queue no nosso ultimo projeto, mas em vez de meter na queue, mete no array de threads, em principio é só fazer append ao array
+
+  int reg_fd = open(reg_pipe, O_WRONLY);
+  
 
   for (unsigned int i = 0; i < max_threads; i++) {
     if (pthread_join(threads[i], NULL) != 0) {
@@ -322,6 +358,9 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Failed to open directory: %s\n", argv[1]);
     return 0;
   }
+
+  char tmp[MAX_PIPE_PATH_LENGTH] = argv[4];
+  sscanf(reg_pipe, "/tmp/%s", tmp);
 
   dispatch_threads(dir);
 

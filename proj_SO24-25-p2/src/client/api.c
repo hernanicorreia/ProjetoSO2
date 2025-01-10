@@ -2,36 +2,35 @@
 
 #include "src/common/constants.h"
 #include "src/common/protocol.h"
+#include <fcntl.h>
+#include <unistd.h>
 
-
-char[MAX_PIPE_PATH_LENGTH] req_fifo_path;
-char[MAX_PIPE_PATH_LENGTH] resp_fifo_path;
-char[MAX_PIPE_PATH_LENGTH] notif_fifo_path;
-char[MAX_PIPE_PATH_LENGTH] server_fifo_path;
+char req_fifo_path[MAX_PIPE_PATH_LENGTH];
+char resp_fifo_path[MAX_PIPE_PATH_LENGTH];
+char notif_fifo_path[MAX_PIPE_PATH_LENGTH];
+char server_fifo_path[MAX_PIPE_PATH_LENGTH];
 int req_fd;
 int resp_fd;
 int notif_fd;
 
 int kvs_connect(char const *req_pipe_path, char const *resp_pipe_path,
-                char const *server_pipe_path, char const *notif_pipe_path,
-                ) {
+                char const *server_pipe_path, char const *notif_pipe_path) {
   
-  req_fifo_path = req_pipe_path;
-  resp_fifo_path = resp_pipe_path;
-  notif_fifo_path = notif_pipe_path;
-  server_fifo_path = server_pipe_path;
+  strncpy(resp_fifo_path, resp_pipe_path, MAX_PIPE_PATH_LENGTH);
+  strncpy(notif_fifo_path, notif_pipe_path, MAX_PIPE_PATH_LENGTH);
+  strncpy(server_fifo_path, server_pipe_path, MAX_PIPE_PATH_LENGTH);
   unlink(resp_pipe_path);
   unlink(notif_pipe_path);
   unlink(req_pipe_path);
   mkfifo(req_pipe_path, 0666);
   mkfifo(resp_pipe_path, 0666);
   mkfifo(notif_pipe_path, 0666);
-  if(access(req_pipe_path, F_OK) == -1 || access(resp_pipe_path, F_OK) == -1 || access(notif_pipe_path, F_OK) == -1){
+  if (access(req_pipe_path, F_OK) == -1 || access(resp_pipe_path, F_OK) == -1 || access(notif_pipe_path, F_OK) == -1) {
     return 1;
   }
 
   int server_fd;
-  if((server_fd = open(server_pipe_path, O_WRONLY)) == -1){
+  if ((server_fd = open(server_pipe_path, O_WRONLY)) == -1) {
     return 1;
   }
   memset(req_pipe_path + strlen(req_pipe_path), "\0", MAX_PIPE_PATH_LENGTH - strlen(req_pipe_path));
@@ -56,7 +55,7 @@ int kvs_connect(char const *req_pipe_path, char const *resp_pipe_path,
 int kvs_disconnect(void) {
   char* msg = OP_CODE_DISCONNECT;
   write_all(req_fd, msg, 1);
-  char[2] buffer;
+  char buffer[2];
   while(1){
     read_all(resp_fd, buffer, 2);
     if(buffer[0] == OP_CODE_DISCONNECT){

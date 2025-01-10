@@ -4,6 +4,7 @@
 
 #include <pthread.h>
 #include <stddef.h>
+#include <pthread.h>
 
 typedef struct KeyNode {
   char *key;

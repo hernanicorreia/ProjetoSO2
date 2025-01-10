@@ -8,7 +8,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "constants.h"
+#include "common/constants.h"
 #include "io.h"
 #include "operations.h"
 #include "parser.h"
@@ -22,6 +22,8 @@ struct SharedData {
 
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t n_current_backups_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t queue_cond = PTHREAD_COND_INITIALIZER;
 
 size_t active_backups = 0; // Number of active backups
 size_t max_backups;        // Maximum allowed simultaneous backups
@@ -30,13 +32,58 @@ char *jobs_directory = NULL;
 char reg_pipe[MAX_PIPE_PATH_LENGTH] = "";
 int* session_threads[MAX_SESSION_COUNT];
 
+int flag = 0; // Declare flag as a global variable
+Job_Queue* job_head = NULL; // Declare job_head as a global variable
+int job_counter = 0; // Global counter for job index
+
+typedef struct Job_Queue {
+  char *file_name;
+  struct Job_Queue *next;
+} Job_Queue;
+
+Job_Queue* pop() {
+  if (job_head == NULL) {
+    return NULL;
+  }
+  Job_Queue* job = job_head;
+  job_head = job_head->next;
+  return job;
+}
 
 
+void* process_file(void* arg) {
+  (void)arg; // Unused argument
+  while (1) {
+    pthread_mutex_lock(&queue_lock);
+    if (flag == 1 && job_head == NULL) {
+      pthread_mutex_unlock(&queue_lock);
+      return NULL;
+    }
+    while (job_head == NULL && flag == 0) {
+      pthread_cond_wait(&queue_cond, &queue_lock);
+    }
+    Job_Queue* job = pop();
+    pthread_mutex_unlock(&queue_lock);
+    if (job == NULL) {
+      continue;
+    }
+    int file_d = open(job->file_name, O_RDONLY);
+    char file_out_name[512];
+    snprintf(file_out_name, sizeof(file_out_name), "%.*s.out", (int)(strrchr(job->file_name, '.') - job->file_name), job->file_name);
+    int file_out = open(file_out_name, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    parse_file(file_d, file_out, job->file_name);
+    free(job->file_name);
+    free(job);
+    close(file_d);
+    close(file_out);
+  }
+  return NULL;
+}
 
 void* look_for_session(void* arg){
   (void)arg; //unused argument
   while(1){
-    pthread_mutex_lock(&queue_lock); //create lock for the queue
+    pthread_mutex_lock(&queue_lock); //create lock for the queue threads procura nao ha mais q um 
     if(flag == 1 && job_head == NULL){ //declare flag as a global variable
       pthread_mutex_unlock(&queue_lock);
       return NULL;
@@ -286,7 +333,7 @@ static void dispatch_threads(DIR *dir) {
 
   //BIG BOSS
   for(int i = 0; i < MAX_SESSION_COUNT; i++){
-    pthread_create(&session_threads[i], NULL, look_for_session(), NULL);
+    pthread_create(&session_threads[i], NULL, look_for_session, NULL);
   }
 
   //O BIG BOSS tem de ir pondo a info das sessões no array de threads, e as threads vão lendo o pipe de requests e executando as funções correspondentes

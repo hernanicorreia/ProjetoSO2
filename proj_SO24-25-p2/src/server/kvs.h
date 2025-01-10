@@ -2,9 +2,11 @@
 #define KEY_VALUE_STORE_H
 #define TABLE_SIZE 26
 
+
 #include <pthread.h>
 #include <stddef.h>
 #include <pthread.h>
+
 
 typedef struct KeyNode {
   char *key;

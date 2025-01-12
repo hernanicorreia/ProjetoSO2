@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
@@ -50,7 +51,39 @@ Job_Queue* pop() {
   return job;
 }
 
+volatile sig_atomic_t sigusr1_received = 0;
 
+// Signal handler for SIGUSR1
+void handle_sigusr1(int sig) {
+    if (sig == SIGUSR1) {
+        sigusr1_received = 1;
+    }
+}
+
+void handle_sigusr1_action() {
+    // Clear all subscriptions in the hashtable
+    clear_subscriptions();
+
+    // Close notification and response FIFOs for all clients
+    close_fifos();
+
+    // Notify clients to terminate
+    notify_clients_to_terminate();
+}
+
+void clear_subscriptions() {
+    // Logic to clear all subscriptions in the hashtable
+}
+
+void close_fifos() {
+    // Logic to close all FIFOs
+}
+
+void notify_clients_to_terminate() {
+    // Logic to notify clients to terminate
+}
+
+//threads , hash os q tao sub
 void* process_file(void* arg) {
   (void)arg; // Unused argument
   while (1) {
@@ -81,6 +114,7 @@ void* process_file(void* arg) {
 }
 
 void* look_for_session(void* arg){
+    
   (void)arg; //unused argument
   while(1){
     pthread_mutex_lock(&queue_lock); //create lock for the queue threads procura nao ha mais q um 
@@ -368,6 +402,12 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  struct sigaction sa;
+  sa.sa_handler = handle_sigusr1;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigaction(SIGUSR1, &sa, NULL);
+
   jobs_directory = argv[1];
 
   char *endptr;
@@ -415,6 +455,17 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Failed to close directory\n");
     return 0;
   }
+
+ for (int i = 0; i < MAX_SESSION_COUNT; i++) {
+    pthread_create(&session_threads[i], NULL, look_for_session, NULL);
+  }
+
+  while (1) {
+    if (sigusr1_received) {
+      // Handle SIGUSR1: clear subscriptions and close FIFOs
+      handle_sigusr1_action();
+      sigusr1_received = 0;
+    }
 
   while (active_backups > 0) {
     wait(NULL);

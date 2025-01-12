@@ -19,6 +19,7 @@ int hash(const char *key) {
   }
   return -1; // Invalid index for non-alphabetic or number strings
 }
+//notoficar o qnd se altera chave 
 
 struct HashTable *create_hash_table() {
   HashTable *ht = malloc(sizeof(HashTable));
@@ -34,9 +35,15 @@ struct HashTable *create_hash_table() {
 int write_pair(HashTable *ht, const char *key, const char *value) {
   int index = hash(key);
 
+  pthread_rwlock_wrlock(&ht->tablelock);
+
   // Search for the key node
   KeyNode *keyNode = ht->table[index];
   KeyNode *previousNode;
+
+  notify_clients_key_altered(key);
+
+  pthread_rwlock_unlock(&ht->tablelock);
 
   while (keyNode != NULL) {
     if (strcmp(keyNode->key, key) == 0) {
@@ -54,7 +61,12 @@ int write_pair(HashTable *ht, const char *key, const char *value) {
   keyNode->value = strdup(value);   // Allocate memory for the value
   keyNode->next = ht->table[index]; // Link to existing nodes
   ht->table[index] = keyNode; // Place new key node at the start of the list
+
   return 0;
+}
+
+void notify_clients_key_altered(const char *key) {
+    // Logic to notify clients that the key has been altered
 }
 
 char *read_pair(HashTable *ht, const char *key) {

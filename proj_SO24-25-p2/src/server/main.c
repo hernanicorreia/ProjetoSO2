@@ -130,7 +130,7 @@ void* look_for_session(void* arg){
     pthread_mutex_unlock(&queue_lock);
     
     //get the fifo paths and open all of them saving the fd's
-    char[3][MAX_PIPE_PATH_LENGTH] fifos;
+    char fifos[MAX_PIPE_PATH_LENGTH][3];
     //fifo[0] = req_fifo_path, fifo[1] = resp_fifo_path, fifo[2] = notif_fifo_path
     sscanf(job->file_name, "%s %s %s", fifos[0], fifos[1], fifos[2]);
     int req_fd = open(fifos[0], O_RDONLY);

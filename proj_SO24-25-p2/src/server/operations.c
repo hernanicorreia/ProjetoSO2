@@ -182,20 +182,25 @@ void kvs_wait(unsigned int delay_ms) {
   nanosleep(&delay, NULL);
 }
 
-int subscribe_client_key(const char *key, int client_notif_fd) {
+int kvs_unsubscribe(const char *key, int client_notif_fd) {
+  if (kvs_table == NULL) {
+    fprintf(stderr, "KVS state must be initialized\n");
+    return 1;
+  }
+
+  pthread_rwlock_wrlock(&kvs_table->tablelock);
+
   int index = hash(key);
 
-  pthread_rwlock_wrlock(&ht->tablelock);
-
-  KeyNode *keyNode = ht->table[index];
+  KeyNode *keyNode = kvs_table->table[index];
   KeyNode *previousNode;
 
   while (keyNode != NULL) {
     if (strcmp(keyNode->key, key) == 0) {
       for (int i = 0; i < MAX_SESSION_COUNT; i++) {
-        if (keyNode->subs[i] == NULL) {
-          keyNode->subs[i] = client_notif_fd;
-          pthread_rwlock_unlock(&ht->tablelock);
+        if (keyNode->subs[i] == client_notif_fd) {
+          keyNode->subs[i] = NULL;
+          pthread_rwlock_unlock(&kvs_table->tablelock);
           return 0;
         }
       }
@@ -203,7 +208,35 @@ int subscribe_client_key(const char *key, int client_notif_fd) {
     previousNode = keyNode;
     keyNode = previousNode->next; // Move to the next node
   }
-  pthread_rwlock_unlock(&ht->tablelock);
+  pthread_rwlock_unlock(&kvs_table->tablelock);
 
+  return 1;
+}
+
+int subscribe_client_key(const char *key, int client_notif_fd) {
+  if (kvs_table == NULL) {
+    fprintf(stderr, "KVS state must be initialized\n");
+    return 1;
+  }
+
+  int index = hash(key);
+
+  pthread_rwlock_wrlock(&kvs_table->tablelock);
+
+  KeyNode *keyNode = kvs_table->table[index];
+  while (keyNode != NULL) {
+    if (strcmp(keyNode->key, key) == 0) {
+      for (int i = 0; i < MAX_SESSION_COUNT; i++) {
+        if (keyNode->subs[i] == NULL) {
+          keyNode->subs[i] = client_notif_fd; 
+          pthread_rwlock_unlock(&kvs_table->tablelock);
+          return 0;
+        }
+      }
+    }
+    keyNode = keyNode->next; // Move to the next node
+  }
+
+  pthread_rwlock_unlock(&kvs_table->tablelock);
   return 1;
 }

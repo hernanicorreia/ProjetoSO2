@@ -84,6 +84,17 @@ void notify_clients_to_terminate() {
     // Logic to notify clients to terminate
 }
 
+
+int disconnect_client(int fifos[3]){
+  unsub_all(fifos[2]);
+  close(fifos[0]);
+  close(fifos[2]);
+  write_all(fifos[1], "21", 3);
+  close(fifos[1]);
+}
+
+
+
 //threads , hash os q tao sub
 void* process_file(void* arg) {
   (void)arg; // Unused argument
@@ -153,6 +164,7 @@ void* look_for_session(void* arg){
       read(req_fd, &op_code, 1);
       switch(op_code){
         case 2:
+          disconnect_client(fifos);
           break;
         case 3:
           //parse
@@ -161,7 +173,9 @@ void* look_for_session(void* arg){
           subscribe_client_key(key, fifos[2]);
           break;
         case 4:
-          unsubscribe_client_key(key);
+          //parse
+          char key[MAX_STRING_SIZE]; 
+          unsubscribe_client_key(key, fifos[2]);
           break;
       }
     }

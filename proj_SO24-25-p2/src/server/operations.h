@@ -69,6 +69,7 @@ int get_n_current_backups();
 /// @return 0 if the client was subscribed successfully, 1 otherwise.
 int subscribe_client_key(const char *key, int client_notif_fd);
 int kvs_unsubscribe(const char *key, int client_notif_fd);
+int kvs_unsubscribe_all(int fd);
 
 
 #endif // KVS_OPERATIONS_H

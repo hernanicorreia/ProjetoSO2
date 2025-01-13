@@ -33,6 +33,7 @@ size_t max_threads;        // Maximum allowed simultaneous threads
 char *jobs_directory = NULL;
 char reg_pipe[MAX_PIPE_PATH_LENGTH] = "";
 int* session_threads[MAX_SESSION_COUNT];
+int* all_fifos[MAX_SESSION_COUNT][3];
 
 int flag = 0; // Declare flag as a global variable
 Client_Queue* job_head = NULL; // Declare job_head as a global variable
@@ -56,21 +57,20 @@ volatile sig_atomic_t sigusr1_received = 0;
 
 // Signal handler for SIGUSR1
 void handle_sigusr1(int sig) {
-    if (sig == SIGUSR1) {
-        sigusr1_received = 1;
+  if(sig == SIGUSR1){
+    if(signal(SIGUSR1, handle_sigusr1) == SIG_ERR){
+      exit(EXIT_FAILURE);
     }
+  for(int i = 0; i < MAX_SESSION_COUNT; i++ ){
+    close(all_fifos[i][0]);
+    close(all_fifos[i][1]);
+    close(all_fifos[i][2]);
+  }
+
+  }
 }
 
-void handle_sigusr1_action() {
-    // Clear all subscriptions in the hashtable
-    clear_subscriptions();
 
-    // Close notification and response FIFOs for all clients
-    close_fifos();
-
-    // Notify clients to terminate
-    notify_clients_to_terminate();
-}
 
 void clear_subscriptions() {
     // Logic to clear all subscriptions in the hashtable
@@ -147,6 +147,15 @@ void* look_for_session(void* arg){
     int req_fd = open(fifos[0], O_RDONLY);
     int resp_fd = open(fifos[1], O_WRONLY);
     int notif_fd = open(fifos[2], O_WRONLY);
+    //save the fd's in the array of all fifos with a for loop that only writes if the position is not occupied
+    for(int i = 0; i < MAX_SESSION_COUNT; i++){
+      if(all_fifos[i][0] == -1){
+        all_fifos[i][0] = req_fd;
+        all_fifos[i][1] = resp_fd;
+        all_fifos[i][2] = notif_fd;
+        break;
+      }
+    }
     if(resp_fd == -1)
       return NULL;
     if(req_fd == -1 || notif_fd == -1){
@@ -159,7 +168,8 @@ void* look_for_session(void* arg){
 
     
     while(1){
-
+      
+      
       char op_code;
       read(req_fd, &op_code, 1);
       switch(op_code){
@@ -169,12 +179,19 @@ void* look_for_session(void* arg){
         case 3:
           //parse
           char key[MAX_STRING_SIZE];
-          read(req_fd, key, MAX_STRING_SIZE);
+          int n = read(req_fd, key, MAX_STRING_SIZE);
+          if(n == -1 || n == 1){
+            disconnect_client(fifos);
+          }
           subscribe_client_key(key, fifos[2]);
           break;
         case 4:
           //parse
           char key[MAX_STRING_SIZE]; 
+          int n = read(req_fd, key, MAX_STRING_SIZE);
+          if(n == -1 || n == 1){
+            disconnect_client(fifos);
+          }
           unsubscribe_client_key(key, fifos[2]);
           break;
       }
@@ -431,12 +448,14 @@ static void dispatch_threads(DIR *dir) {
       new_job->file_name = malloc(MAX_PIPE_PATH_LENGTH*3);
       read(reg_fd, new_job->file_name, MAX_PIPE_PATH_LENGTH*3);
       new_job->next = NULL;
-      pthread_mutex_lock(&queue_lock);
       if(job_head != NULL){
         Client_Queue* aux = job_head;
         new_job->next = aux;
       }
       job_head = new_job;
+      pthread_mutex_lock(&queue_lock);
+      pthread_cond_signal(&queue_cond);
+      all_fifos.append(new_job->filename);
     }
     
   }
@@ -471,11 +490,6 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  struct sigaction sa;
-  sa.sa_handler = handle_sigusr1;
-  sigemptyset(&sa.sa_mask);
-  sa.sa_flags = 0;
-  sigaction(SIGUSR1, &sa, NULL);
 
   jobs_directory = argv[1];
 
@@ -519,6 +533,12 @@ int main(int argc, char **argv) {
   sscanf(reg_pipe, "/tmp/%s", tmp);
 
   dispatch_threads(dir);
+
+  
+  if(signal(SIGUSR1, handle_sigusr1) == SIG_ERR){
+    exit(EXIT_FAILURE);
+  }
+
 
   if (closedir(dir) == -1) {
     fprintf(stderr, "Failed to close directory\n");

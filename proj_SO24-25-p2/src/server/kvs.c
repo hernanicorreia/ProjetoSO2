@@ -49,7 +49,7 @@ int write_pair(HashTable *ht, const char *key, const char *value) {
       // overwrite value
       free(keyNode->value);
       keyNode->value = strdup(value);
-      notify_clients_key_altered(key);
+      notify_clients_key_altered(ht, key);
       pthread_rwlock_unlock(&ht->tablelock);
       return 0 ;
     }
@@ -69,8 +69,21 @@ int write_pair(HashTable *ht, const char *key, const char *value) {
   return 0;
 }
 
-void notify_clients_key_altered(const char *key) {
-    // Logic to notify clients that the key has been altered
+void notify_clients_key_altered(HashTable* ht, char *key) {
+    for(int i = 0; i < MAX_SESSION_COUNT; i++){
+        if(key->subs[i] != NULL){
+            char* notif = malloc(MAX_STRING_SIZE);
+            char* value = read_pair(ht, key);
+            if(value == NULL)
+              sprintf(notif, "(%s,DELETED)", key);
+            else
+              sprintf(notif, "(%s,%s)", key, value );
+            if(write_all(key->subs[i], notif, MAX_STRING_SIZE) == -1){
+              key->subs[i] = NULL;
+              //notify thread to get new client or not i guess
+            }	
+        }
+    }
 }
 
 char *read_pair(HashTable *ht, const char *key) {

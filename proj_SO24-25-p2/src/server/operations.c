@@ -182,6 +182,30 @@ void kvs_wait(unsigned int delay_ms) {
   nanosleep(&delay, NULL);
 }
 
+int kvs_unsubscribe_all(int fd) {
+  if (kvs_table == NULL) {
+    fprintf(stderr, "KVS state must be initialized\n");
+    return 1;
+  }
+
+  pthread_rwlock_wrlock(&kvs_table->tablelock);
+
+  for (int index = 0; index < TABLE_SIZE; index++) {
+    KeyNode *keyNode = kvs_table->table[index];
+    while (keyNode != NULL) {
+      for (int i = 0; i < MAX_SESSION_COUNT; i++) {
+        if (keyNode->subs[i] == fd) {
+          keyNode->subs[i] = NULL;
+        }
+      }
+      keyNode = keyNode->next; // Move to the next node
+    }
+  }
+
+  pthread_rwlock_unlock(&kvs_table->tablelock);
+  return 0;
+}
+
 int kvs_unsubscribe(const char *key, int client_notif_fd) {
   if (kvs_table == NULL) {
     fprintf(stderr, "KVS state must be initialized\n");

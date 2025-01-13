@@ -62,4 +62,12 @@ void set_n_current_backups(int _n_current_backups);
 // @return n_current_backups
 int get_n_current_backups();
 
+
+/// Subscribes a client to a key.
+/// @param key Key to subscribe to.
+/// @param client_notif_fd File descriptor to notify the client.
+/// @return 0 if the client was subscribed successfully, 1 otherwise.
+int subscribe_client_key(HashTable *ht, const char *key, int client_notif_fd);
+
+
 #endif // KVS_OPERATIONS_H

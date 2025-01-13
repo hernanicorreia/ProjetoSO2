@@ -41,22 +41,26 @@ int write_pair(HashTable *ht, const char *key, const char *value) {
   KeyNode *keyNode = ht->table[index];
   KeyNode *previousNode;
 
-  notify_clients_key_altered(key);
-
-  pthread_rwlock_unlock(&ht->tablelock);
+  
 
   while (keyNode != NULL) {
     if (strcmp(keyNode->key, key) == 0) {
+      // notify subscribers here
       // overwrite value
       free(keyNode->value);
       keyNode->value = strdup(value);
-      return 0;
+      notify_clients_key_altered(key);
+      pthread_rwlock_unlock(&ht->tablelock);
+      return 0 ;
     }
     previousNode = keyNode;
     keyNode = previousNode->next; // Move to the next node
   }
+  pthread_rwlock_unlock(&ht->tablelock);
+
   // Key not found, create a new key node
   keyNode = malloc(sizeof(KeyNode));
+  keyNode->subs[0] = NULL;
   keyNode->key = strdup(key);       // Allocate memory for the key
   keyNode->value = strdup(value);   // Allocate memory for the value
   keyNode->next = ht->table[index]; // Link to existing nodes
@@ -134,3 +138,5 @@ void free_table(HashTable *ht) {
   pthread_rwlock_destroy(&ht->tablelock);
   free(ht);
 }
+
+

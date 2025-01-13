@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "common/constants.h"
+#include "common/protocol.h"
 #include "io.h"
 #include "operations.h"
 #include "parser.h"
@@ -34,19 +35,19 @@ char reg_pipe[MAX_PIPE_PATH_LENGTH] = "";
 int* session_threads[MAX_SESSION_COUNT];
 
 int flag = 0; // Declare flag as a global variable
-Job_Queue* job_head = NULL; // Declare job_head as a global variable
+Client_Queue* job_head = NULL; // Declare job_head as a global variable
 int job_counter = 0; // Global counter for job index
 
-typedef struct Job_Queue {
+typedef struct Client_Queue {
   char *file_name;
-  struct Job_Queue *next;
-} Job_Queue;
+  struct Client_Queue *next;
+} Client_Queue;
 
-Job_Queue* pop() {
+Client_Queue* pop() {
   if (job_head == NULL) {
     return NULL;
   }
-  Job_Queue* job = job_head;
+  Client_Queue* job = job_head;
   job_head = job_head->next;
   return job;
 }
@@ -95,7 +96,7 @@ void* process_file(void* arg) {
     while (job_head == NULL && flag == 0) {
       pthread_cond_wait(&queue_cond, &queue_lock);
     }
-    Job_Queue* job = pop();
+    Client_Queue* job = pop();
     pthread_mutex_unlock(&queue_lock);
     if (job == NULL) {
       continue;
@@ -125,10 +126,45 @@ void* look_for_session(void* arg){
     while(job_head == NULL && flag == 0){ 
       pthread_cond_wait(&queue_cond, &queue_lock);
     }
-    Job_Queue* job = pop(); //adapt the queue to work with the array(a função pop ia à lista e tirava de lá o primeiro elemento, agora podes só ter um counter global e dar return a esse indice do array de sessões, já que este nunca vai ficar"sem espaço")
+    Client_Queue* job = pop(); //adapt the queue to work with the array(a função pop ia à lista e tirava de lá o primeiro elemento, agora podes só ter um counter global e dar return a esse indice do array de sessões, já que este nunca vai ficar"sem espaço")
     pthread_mutex_unlock(&queue_lock);
-    //faz a thread ler repetidamente o pipe de requests e quando ler algo faz o parse (só precisa de ler um bite de cada vez para ver se é o op_code)
-    //se for um op_code válido, faz o parse e executa a função correspondente
+    
+    //get the fifo paths and open all of them saving the fd's
+    char[3][MAX_PIPE_PATH_LENGTH] fifos;
+    //fifo[0] = req_fifo_path, fifo[1] = resp_fifo_path, fifo[2] = notif_fifo_path
+    sscanf(job->file_name, "%s %s %s", fifos[0], fifos[1], fifos[2]);
+    int req_fd = open(fifos[0], O_RDONLY);
+    int resp_fd = open(fifos[1], O_WRONLY);
+    int notif_fd = open(fifos[2], O_WRONLY);
+    if(resp_fd == -1)
+      return NULL;
+    if(req_fd == -1 || notif_fd == -1){
+      write(resp_fd, "1", 2);
+      return NULL;
+    }
+    write(resp_fd, "0", 2);
+
+
+
+    
+    while(1){
+
+      char op_code;
+      read(req_fd, &op_code, 1);
+      switch(op_code){
+        case 2:
+          break;
+        case 3:
+          //parse
+          char key[MAX_STRING_SIZE];
+          read(req_fd, key, MAX_STRING_SIZE);
+          subscribe_client_key(key, fifos[2]);
+          break;
+        case 4:
+          unsubscribe_client_key(key);
+          break;
+      }
+    }
 
   }
   return NULL;
@@ -371,9 +407,28 @@ static void dispatch_threads(DIR *dir) {
   }
 
   //O BIG BOSS tem de ir pondo a info das sessões no array de threads, e as threads vão lendo o pipe de requests e executando as funções correspondentes
-  //Ele vai funcionar como o loop que metia os jobs na job_queue no nosso ultimo projeto, mas em vez de meter na queue, mete no array de threads, em principio é só fazer append ao array
+  //Ele vai funcionar como o loop que metia os jobs na Client_Queue no nosso ultimo projeto, mas em vez de meter na queue, mete no array de threads, em principio é só fazer append ao array
+  int reg_fd = open(reg_pipe, O_RDONLY);
+  while(1){
+    char op_code;
+    read(reg_fd, &op_code, 1);
+    if(op_code == OP_CODE_CONNECT){
+      Client_Queue* new_job = malloc(sizeof(Client_Queue));
+      new_job->file_name = malloc(MAX_PIPE_PATH_LENGTH*3);
+      read(reg_fd, new_job->file_name, MAX_PIPE_PATH_LENGTH*3);
+      new_job->next = NULL;
+      pthread_mutex_lock(&queue_lock);
+      if(job_head != NULL){
+        Client_Queue* aux = job_head;
+        new_job->next = aux;
+      }
+      job_head = new_job;
+    }
+    
+  }
 
-  int reg_fd = open(reg_pipe, O_WRONLY);
+
+
   
 
   for (unsigned int i = 0; i < max_threads; i++) {
@@ -456,16 +511,6 @@ int main(int argc, char **argv) {
     return 0;
   }
 
- for (int i = 0; i < MAX_SESSION_COUNT; i++) {
-    pthread_create(&session_threads[i], NULL, look_for_session, NULL);
-  }
-
-  while (1) {
-    if (sigusr1_received) {
-      // Handle SIGUSR1: clear subscriptions and close FIFOs
-      handle_sigusr1_action();
-      sigusr1_received = 0;
-    }
 
   while (active_backups > 0) {
     wait(NULL);

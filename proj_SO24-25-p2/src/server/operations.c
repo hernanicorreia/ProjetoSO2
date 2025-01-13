@@ -181,3 +181,29 @@ void kvs_wait(unsigned int delay_ms) {
   struct timespec delay = delay_to_timespec(delay_ms);
   nanosleep(&delay, NULL);
 }
+
+int subscribe_client_key(const char *key, int client_notif_fd) {
+  int index = hash(key);
+
+  pthread_rwlock_wrlock(&ht->tablelock);
+
+  KeyNode *keyNode = ht->table[index];
+  KeyNode *previousNode;
+
+  while (keyNode != NULL) {
+    if (strcmp(keyNode->key, key) == 0) {
+      for (int i = 0; i < MAX_SESSION_COUNT; i++) {
+        if (keyNode->subs[i] == NULL) {
+          keyNode->subs[i] = client_notif_fd;
+          pthread_rwlock_unlock(&ht->tablelock);
+          return 0;
+        }
+      }
+    }
+    previousNode = keyNode;
+    keyNode = previousNode->next; // Move to the next node
+  }
+  pthread_rwlock_unlock(&ht->tablelock);
+
+  return 1;
+}

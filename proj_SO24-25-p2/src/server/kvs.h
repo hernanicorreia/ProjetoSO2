@@ -6,12 +6,14 @@
 #include <pthread.h>
 #include <stddef.h>
 #include <pthread.h>
+#include <common/constants.h>
 
 
 typedef struct KeyNode {
   char *key;
   char *value;
   struct KeyNode *next;
+  int* subs[MAX_SESSION_COUNT];
   
 } KeyNode;
 
@@ -48,5 +50,6 @@ int delete_pair(HashTable *ht, const char *key);
 /// Frees the hashtable.
 /// @param ht Hash table to be deleted.
 void free_table(HashTable *ht);
+
 
 #endif // KVS_H

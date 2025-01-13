@@ -6,10 +6,10 @@
 // mensagem recebida no server usam estes opcodes tambem nos clientes quando
 // enviam mensagens para o server
 enum {
-  OP_CODE_CONNECT = 'C',
-  OP_CODE_DISCONNECT = 'D',
-  OP_CODE_SUBSCRIBE = 'S',
-  OP_CODE_UNSUBSCRIBE = 'U',
+  OP_CODE_CONNECT = 1,
+  OP_CODE_DISCONNECT = 2,
+  OP_CODE_SUBSCRIBE = 3,
+  OP_CODE_UNSUBSCRIBE = 4,
 };
 
 #endif // COMMON_PROTOCOL_H

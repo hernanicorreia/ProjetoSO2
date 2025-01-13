@@ -8,13 +8,16 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <sys/stat.h>
 
-#include "common/constants.h"
-#include "common/protocol.h"
+#include "../common/constants.h"
+#include "../common/protocol.h"
+#include "../common/io.h"
 #include "io.h"
 #include "operations.h"
 #include "parser.h"
-#include "pthread.h"
 
 struct SharedData {
   DIR *dir;
@@ -22,27 +25,31 @@ struct SharedData {
   pthread_mutex_t directory_mutex;
 };
 
+typedef struct Client_Queue {
+  char* req_path;
+  char* resp_path;
+  char* notif_path;
+  struct Client_Queue *next;
+} Client_Queue;
+
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t n_current_backups_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t queue_cond = PTHREAD_COND_INITIALIZER;
+sem_t sem_full;
+sem_t sem_empty;
+
 
 size_t active_backups = 0; // Number of active backups
 size_t max_backups;        // Maximum allowed simultaneous backups
 size_t max_threads;        // Maximum allowed simultaneous threads
 char *jobs_directory = NULL;
-char reg_pipe[MAX_PIPE_PATH_LENGTH] = "";
-int* session_threads[MAX_SESSION_COUNT];
-int* all_fifos[MAX_SESSION_COUNT][3];
+char reg_pipe[MAX_PIPE_PATH_LENGTH];
+int all_fifos[MAX_SESSION_COUNT][3];
+
 
 int flag = 0; // Declare flag as a global variable
 Client_Queue* job_head = NULL; // Declare job_head as a global variable
 int job_counter = 0; // Global counter for job index
-
-typedef struct Client_Queue {
-  char *file_name;
-  struct Client_Queue *next;
-} Client_Queue;
 
 Client_Queue* pop() {
   if (job_head == NULL) {
@@ -61,12 +68,11 @@ void handle_sigusr1(int sig) {
     if(signal(SIGUSR1, handle_sigusr1) == SIG_ERR){
       exit(EXIT_FAILURE);
     }
-  for(int i = 0; i < MAX_SESSION_COUNT; i++ ){
-    close(all_fifos[i][0]);
-    close(all_fifos[i][1]);
-    close(all_fifos[i][2]);
-  }
-
+    for(int i = 0; i < MAX_SESSION_COUNT; i++ ){
+      close(all_fifos[i][0]);
+      close(all_fifos[i][1]);
+      close(all_fifos[i][2]);
+    }
   }
 }
 
@@ -86,67 +92,50 @@ void notify_clients_to_terminate() {
 
 
 int disconnect_client(int fifos[3]){
-  unsub_all(fifos[2]);
-  close(fifos[0]);
-  close(fifos[2]);
-  write_all(fifos[1], "21", 3);
+  kvs_unsubscribe_all(fifos[2]);
+  if(close(fifos[0]) == -1){
+    write_all(fifos[1], "21", 3);
+    return 1;
+    }
+  if(close(fifos[2] == -1)){
+    write_all(fifos[1], "21", 3);
+    return 1;
+    }
+  write_all(fifos[1], "20", 3);
   close(fifos[1]);
+  return 0;
 }
 
 
 
 //threads , hash os q tao sub
-void* process_file(void* arg) {
-  (void)arg; // Unused argument
-  while (1) {
-    pthread_mutex_lock(&queue_lock);
-    if (flag == 1 && job_head == NULL) {
-      pthread_mutex_unlock(&queue_lock);
-      return NULL;
-    }
-    while (job_head == NULL && flag == 0) {
-      pthread_cond_wait(&queue_cond, &queue_lock);
-    }
-    Client_Queue* job = pop();
-    pthread_mutex_unlock(&queue_lock);
-    if (job == NULL) {
-      continue;
-    }
-    int file_d = open(job->file_name, O_RDONLY);
-    char file_out_name[512];
-    snprintf(file_out_name, sizeof(file_out_name), "%.*s.out", (int)(strrchr(job->file_name, '.') - job->file_name), job->file_name);
-    int file_out = open(file_out_name, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    parse_file(file_d, file_out, job->file_name);
-    free(job->file_name);
-    free(job);
-    close(file_d);
-    close(file_out);
-  }
-  return NULL;
-}
+
 
 void* look_for_session(void* arg){
     
   (void)arg; //unused argument
   while(1){
+    beginning_threads:
+    sem_wait(&sem_empty);
     pthread_mutex_lock(&queue_lock); //create lock for the queue threads procura nao ha mais q um 
     if(flag == 1 && job_head == NULL){ //declare flag as a global variable
       pthread_mutex_unlock(&queue_lock);
       return NULL;
     }
-    while(job_head == NULL && flag == 0){ 
-      pthread_cond_wait(&queue_cond, &queue_lock);
-    }
+    
     Client_Queue* job = pop(); //adapt the queue to work with the array(a função pop ia à lista e tirava de lá o primeiro elemento, agora podes só ter um counter global e dar return a esse indice do array de sessões, já que este nunca vai ficar"sem espaço")
     pthread_mutex_unlock(&queue_lock);
     
+    
     //get the fifo paths and open all of them saving the fd's
-    char fifos[MAX_PIPE_PATH_LENGTH][3];
+    
     //fifo[0] = req_fifo_path, fifo[1] = resp_fifo_path, fifo[2] = notif_fifo_path
-    sscanf(job->file_name, "%s %s %s", fifos[0], fifos[1], fifos[2]);
-    int req_fd = open(fifos[0], O_RDONLY);
-    int resp_fd = open(fifos[1], O_WRONLY);
-    int notif_fd = open(fifos[2], O_WRONLY);
+    strchr(job->req_path,'&')[0] = '\0';
+    strchr(job->resp_path,'&')[0] = '\0';
+    strchr(job->notif_path,'&')[0] = '\0';
+    int req_fd = open(job->req_path, O_RDONLY);
+    int resp_fd = open(job->resp_path, O_WRONLY);
+    int notif_fd = open(job->notif_path, O_WRONLY);
     //save the fd's in the array of all fifos with a for loop that only writes if the position is not occupied
     for(int i = 0; i < MAX_SESSION_COUNT; i++){
       if(all_fifos[i][0] == -1){
@@ -159,42 +148,59 @@ void* look_for_session(void* arg){
     if(resp_fd == -1)
       return NULL;
     if(req_fd == -1 || notif_fd == -1){
-      write(resp_fd, "1", 2);
+      write(resp_fd, "11", 2);
       return NULL;
     }
-    write(resp_fd, "0", 2);
+    write(resp_fd, "10", 2);
 
 
-
+    int client_fifos[3] = {req_fd, resp_fd, notif_fd};
     
     while(1){
       
       
-      char op_code;
-      read(req_fd, &op_code, 1);
+      char buff;
+      read_all(req_fd, &buff, 1, NULL);
+      int op_code = atoi(&buff);
       switch(op_code){
         case 2:
-          disconnect_client(fifos);
-          break;
+          disconnect_client(client_fifos);
+          sem_post(&sem_full);
+          goto beginning_threads;
         case 3:
           //parse
-          char key[MAX_STRING_SIZE];
-          int n = read(req_fd, key, MAX_STRING_SIZE);
-          if(n == -1 || n == 1){
-            disconnect_client(fifos);
+          char key1[MAX_STRING_SIZE];
+          int n1 = (int)read(req_fd, key1, MAX_STRING_SIZE);
+          if(n1 == -1 || n1 == 1){
+            disconnect_client( client_fifos);
+            sem_post(&sem_full);
+            goto beginning_threads;
           }
-          subscribe_client_key(key, fifos[2]);
+          if(subscribe_client_key(key1, client_fifos[2])){
+            write(resp_fd, "30", 2);
+          }
+          else{
+            write(resp_fd, "31", 2);
+          }
           break;
         case 4:
           //parse
-          char key[MAX_STRING_SIZE]; 
-          int n = read(req_fd, key, MAX_STRING_SIZE);
-          if(n == -1 || n == 1){
-            disconnect_client(fifos);
+          char key2[MAX_STRING_SIZE]; 
+          int n2 = (int)read(req_fd, key2, MAX_STRING_SIZE);
+          if(n2 == -1 || n2 == 1){
+            disconnect_client(client_fifos);
+            sem_post(&sem_full);
+            goto beginning_threads;
           }
-          unsubscribe_client_key(key, fifos[2]);
+          if(kvs_unsubscribe(key2, client_fifos[2])){
+            write(resp_fd, "40", 2);
+          }
+          else{
+            write(resp_fd, "41", 2);
+          }
           break;
       }
+      buff = '\0';
     }
 
   }
@@ -413,6 +419,7 @@ static void *get_file(void *arguments) {
 
 static void dispatch_threads(DIR *dir) {
   pthread_t *threads = malloc(max_threads * sizeof(pthread_t));
+  pthread_t *session_threads = malloc(max_threads * sizeof(pthread_t));
 
   if (threads == NULL) {
     fprintf(stderr, "Failed to allocate memory for threads\n");
@@ -436,27 +443,37 @@ static void dispatch_threads(DIR *dir) {
   for(int i = 0; i < MAX_SESSION_COUNT; i++){
     pthread_create(&session_threads[i], NULL, look_for_session, NULL);
   }
-
+  if(signal(SIGUSR1, handle_sigusr1) == SIG_ERR){
+    exit(EXIT_FAILURE);
+  }
   //O BIG BOSS tem de ir pondo a info das sessões no array de threads, e as threads vão lendo o pipe de requests e executando as funções correspondentes
   //Ele vai funcionar como o loop que metia os jobs na Client_Queue no nosso ultimo projeto, mas em vez de meter na queue, mete no array de threads, em principio é só fazer append ao array
   int reg_fd = open(reg_pipe, O_RDONLY);
   while(1){
     char op_code;
-    read(reg_fd, &op_code, 1);
-    if(op_code == OP_CODE_CONNECT){
+    read_all(reg_fd, &op_code, 1, NULL);
+    if(op_code != '\0')
+    if((atoi(&op_code)) == OP_CODE_CONNECT){
       Client_Queue* new_job = malloc(sizeof(Client_Queue));
-      new_job->file_name = malloc(MAX_PIPE_PATH_LENGTH*3);
-      read(reg_fd, new_job->file_name, MAX_PIPE_PATH_LENGTH*3);
+      char tmp[MAX_PIPE_PATH_LENGTH];
+      read_all(reg_fd, tmp, MAX_PIPE_PATH_LENGTH, NULL);
+      new_job->req_path = strdup(tmp);
+      read_all(reg_fd, tmp, MAX_PIPE_PATH_LENGTH, NULL);
+      new_job->resp_path = strdup(tmp);
+      read_all(reg_fd, tmp, MAX_PIPE_PATH_LENGTH, NULL);
+      new_job->notif_path = strdup(tmp);
       new_job->next = NULL;
+      sem_wait(&sem_full);
+      pthread_mutex_lock(&queue_lock);
       if(job_head != NULL){
         Client_Queue* aux = job_head;
         new_job->next = aux;
       }
       job_head = new_job;
-      pthread_mutex_lock(&queue_lock);
-      pthread_cond_signal(&queue_cond);
-      all_fifos.append(new_job->filename);
+      pthread_mutex_unlock(&queue_lock);
+      sem_post(&sem_empty);
     }
+    op_code = '\0';
     
   }
 
@@ -469,6 +486,14 @@ static void dispatch_threads(DIR *dir) {
       fprintf(stderr, "Failed to join thread %u\n", i);
       pthread_mutex_destroy(&thread_data.directory_mutex);
       free(threads);
+      return;
+    }
+  }
+
+  for (unsigned int i = 0; i < MAX_SESSION_COUNT; i++) {
+    if (pthread_join(session_threads[i], NULL) != 0) {
+      fprintf(stderr, "Failed to join thread %u\n", i);
+      free(session_threads);
       return;
     }
   }
@@ -489,6 +514,7 @@ int main(int argc, char **argv) {
     write_str(STDERR_FILENO, " <max_backups> \n");
     return 1;
   }
+
 
 
   jobs_directory = argv[1];
@@ -529,15 +555,26 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  char tmp[MAX_PIPE_PATH_LENGTH] = argv[4];
-  sscanf(reg_pipe, "/tmp/%s", tmp);
+  strcat(reg_pipe, argv[4]);
+
+  unlink(reg_pipe);
+
+  mkfifo(reg_pipe, 0666);
+
+
+  for(int i = 0; i < MAX_SESSION_COUNT; i++){
+    all_fifos[i][0] = -1;
+    all_fifos[i][1] = -1;
+    all_fifos[i][2] = -1;
+  }
+
+  sem_init(&sem_full, 0, MAX_SESSION_COUNT);
+  sem_init(&sem_empty, 0, 0);
 
   dispatch_threads(dir);
 
   
-  if(signal(SIGUSR1, handle_sigusr1) == SIG_ERR){
-    exit(EXIT_FAILURE);
-  }
+  
 
 
   if (closedir(dir) == -1) {

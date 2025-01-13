@@ -79,3 +79,34 @@ void delay(unsigned int time_ms) {
   struct timespec delay = delay_to_timespec(time_ms);
   nanosleep(&delay, NULL);
 }
+
+void await_response(int fd, int op_code){
+  char* msg1; 
+  char buffer[2];
+  while(1){
+    if(read_all(fd, buffer, 2, NULL) == -1)
+      return ;
+    if(buffer[0] != '\0' && buffer[1] != '\0'){
+      msg1 = &buffer[1];
+      break;
+    }
+  }
+  switch(op_code){
+    case 1:
+      msg1 = "connect";
+      break;
+    case 2:
+      msg1 = "disconnect";
+      break;
+    case 3:
+      msg1 = "subscribe";
+      break;
+    case 4:
+      msg1 = "unsubscribe";
+      break;
+  }
+
+  fprintf(stdout, "Server returned %s for operation: %s\n", &buffer[1], msg1);
+  buffer[0] = '\0';
+}
+

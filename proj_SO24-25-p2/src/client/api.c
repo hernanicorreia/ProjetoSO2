@@ -2,13 +2,19 @@
 
 #include "src/common/constants.h"
 #include "src/common/protocol.h"
+#include "src/common/io.h"
 #include <fcntl.h>
 #include <unistd.h>
+#include <string.h>
+#include <stdio.h>
+#include <sys/stat.h>
 
-char req_fifo_path[MAX_PIPE_PATH_LENGTH];
-char resp_fifo_path[MAX_PIPE_PATH_LENGTH];
-char notif_fifo_path[MAX_PIPE_PATH_LENGTH];
-char server_fifo_path[MAX_PIPE_PATH_LENGTH];
+
+
+char* req_fifo_path;
+char* resp_fifo_path;
+char* notif_fifo_path;
+char* server_fifo_path;
 int req_fd;
 int resp_fd;
 int notif_fd;
@@ -16,52 +22,49 @@ int notif_fd;
 int kvs_connect(char const *req_pipe_path, char const *resp_pipe_path,
                 char const *server_pipe_path, char const *notif_pipe_path) {
   
-  strncpy(resp_fifo_path, resp_pipe_path, MAX_PIPE_PATH_LENGTH);
-  strncpy(notif_fifo_path, notif_pipe_path, MAX_PIPE_PATH_LENGTH);
-  strncpy(server_fifo_path, server_pipe_path, MAX_PIPE_PATH_LENGTH);
+  req_fifo_path = (char*)req_pipe_path;
+  resp_fifo_path = (char*)resp_pipe_path;
+  notif_fifo_path = (char*)notif_pipe_path;
+  server_fifo_path = (char*)server_pipe_path;
   unlink(resp_pipe_path);
   unlink(notif_pipe_path);
   unlink(req_pipe_path);
   mkfifo(req_pipe_path, 0666);
   mkfifo(resp_pipe_path, 0666);
   mkfifo(notif_pipe_path, 0666);
-  if (access(req_pipe_path, F_OK) == -1 || access(resp_pipe_path, F_OK) == -1 || access(notif_pipe_path, F_OK) == -1) {
-    return 1;
-  }
+  
 
   int server_fd;
   if ((server_fd = open(server_pipe_path, O_WRONLY)) == -1) {
     return 1;
   }
-  memset(req_pipe_path + strlen(req_pipe_path), "\0", MAX_PIPE_PATH_LENGTH - strlen(req_pipe_path));
-  memset(resp_pipe_path + strlen(resp_pipe_path), "\0", MAX_PIPE_PATH_LENGTH - strlen(resp_pipe_path));
-  memset(notif_pipe_path + strlen(notif_pipe_path), "\0", MAX_PIPE_PATH_LENGTH - strlen(notif_pipe_path));  
-  char* msg = OP_CODE_CONNECT;
-  strncat(msg, req_pipe_path, MAX_PIPE_PATH_LENGTH);
-  strncat(msg, resp_pipe_path, MAX_PIPE_PATH_LENGTH);
-  strncat(msg, notif_pipe_path, MAX_PIPE_PATH_LENGTH);
+  memset(req_fifo_path + strlen(req_fifo_path), '&', MAX_PIPE_PATH_LENGTH - strlen(req_fifo_path));
+  memset(resp_fifo_path + strlen(resp_fifo_path), '&', MAX_PIPE_PATH_LENGTH - strlen(resp_fifo_path));
+  memset(notif_fifo_path + strlen(notif_fifo_path), '&', MAX_PIPE_PATH_LENGTH - strlen(notif_fifo_path));  
+  char msg[3 * MAX_PIPE_PATH_LENGTH + 1] = "1"; 
+  strcat(msg, req_fifo_path);
+  strcat(msg, resp_fifo_path);
+  strcat(msg, notif_fifo_path);
   
   write_all(server_fd, msg, 3*MAX_PIPE_PATH_LENGTH+1);
   close(server_fd);
-  req_fd = open(req_pipe_path, O_RDWR);
-  resp_fd = open(resp_pipe_path, O_RDWR);
-  notif_fd = open(notif_pipe_path, O_RDWR);
-  await_response();
+  strchr(req_fifo_path, '&')[0] = '\0';
+  strchr(resp_fifo_path, '&')[0] = '\0';
+  strchr(notif_fifo_path, '&')[0] = '\0';
+  req_fd = open(req_fifo_path, O_WRONLY);
+  resp_fd = open(resp_fifo_path, O_RDONLY);
+  notif_fd = open(notif_fifo_path, O_RDONLY);
+  await_response(resp_fd, OP_CODE_CONNECT);
+  
 
 
-  return 0;
+  return notif_fd;
 }
 
 int kvs_disconnect(void) {
-  char* msg = OP_CODE_DISCONNECT;
-  write_all(req_fd, msg, 1);
-  char buffer[2];
-  while(1){
-    read_all(resp_fd, buffer, 2);
-    if(buffer[0] == OP_CODE_DISCONNECT){
-      break;
-    }
-  }
+  char msg = '2';
+  write_all(req_fd, &msg, 1);
+  await_response(resp_fd, OP_CODE_DISCONNECT);
   close(req_fd);
   close(resp_fd);
   close(notif_fd);
@@ -72,56 +75,19 @@ int kvs_disconnect(void) {
 }
 
 int kvs_subscribe(const char *key) {
-  char* msg = OP_CODE_SUBSCRIBE;
-  strncat(msg, key, MAX_STRING_SIZE);
-  memset(msg + strlen(msg), "\0", MAX_STRING_SIZE - strlen(msg));
+  char msg[1 + MAX_STRING_SIZE] = "3";
+  strcat(msg, key);
+  memset(msg + strlen(msg), '\0', MAX_STRING_SIZE - strlen(msg));
   write_all(req_fd, msg, MAX_STRING_SIZE+1);
+  await_response(resp_fd, OP_CODE_SUBSCRIBE);
   return 0;
 }
 
-int kvs_unsubscribe(const char *key, const char *req_pipe_path) {
-  char* msg = OP_CODE_UNSUBSCRIBE;
-  strncat(msg, key, MAX_STRING_SIZE);
-  memset(msg + strlen(msg), "\0", MAX_STRING_SIZE - strlen(msg));
+int kvs_unsubscribe(const char *key) {
+  char msg[1 + MAX_STRING_SIZE] = "4";
+  strcat(msg, key);
+  memset(msg + strlen(msg), '\0', MAX_STRING_SIZE - strlen(msg));
   write_all(req_fd, msg, MAX_STRING_SIZE+1);
+  await_response(resp_fd, OP_CODE_UNSUBSCRIBE);
   return 0;
-}
-
-int await_response(){
-  char* msg;
-  char* msg1; 
-  char* msg2;
-  while(1){
-    char buffer[2];
-    if(read_all(resp_fd, buffer, 2) == -1)
-      return -1;
-    if(buffer[0] == OP_CODE_CONNECT){
-      msg1 = buffer[1];
-      msg2 = "connect";
-      break;
-    }
-    if(buffer[0] == OP_CODE_DISCONNECT){
-      msg1 = buffer[1];
-      msg2 = "disconnect";
-      break;
-    }
-    if(buffer[0] == OP_CODE_SUBSCRIBE){
-      char key[MAX_STRING_SIZE];
-      read_all(resp_fd, key, MAX_STRING_SIZE);
-      printf("Subscribed to key: %s\n", key);
-      msg1 = buffer[1];
-      msg2 = "subscribe";
-      break;
-    }
-    if(buffer[0] == OP_CODE_UNSUBSCRIBE){
-      char key[MAX_STRING_SIZE];
-      read_all(resp_fd, key, MAX_STRING_SIZE);
-      printf("Unsubscribed from key: %s\n", key);
-      msg1 = buffer[1];
-      msg2 = "unsubscribe";
-      break;
-    }
-  }
-  fprintf(stdout, "“Server returned %s for operation:%s", msg1, msg2)
-  buffer[0] = '\0';
 }

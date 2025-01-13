@@ -187,15 +187,18 @@ int kvs_unsubscribe_all(int fd) {
     fprintf(stderr, "KVS state must be initialized\n");
     return 1;
   }
-
-  pthread_rwlock_wrlock(&kvs_table->tablelock);
+  //print showing the lock's status
+  pthread_rwlock_rdlock(&kvs_table->tablelock);
 
   for (int index = 0; index < TABLE_SIZE; index++) {
     KeyNode *keyNode = kvs_table->table[index];
     while (keyNode != NULL) {
       for (int i = 0; i < MAX_SESSION_COUNT; i++) {
         if (keyNode->subs[i] == fd) {
-          keyNode->subs[i] = NULL;
+          pthread_rwlock_wrlock(&kvs_table->tablelock);
+          keyNode->subs[i] = -1;
+          pthread_rwlock_unlock(&kvs_table->tablelock);
+          break;
         }
       }
       keyNode = keyNode->next; // Move to the next node
@@ -212,7 +215,7 @@ int kvs_unsubscribe(const char *key, int client_notif_fd) {
     return 1;
   }
 
-  pthread_rwlock_wrlock(&kvs_table->tablelock);
+  pthread_rwlock_rdlock(&kvs_table->tablelock);
 
   int index = hash(key);
 
@@ -223,7 +226,9 @@ int kvs_unsubscribe(const char *key, int client_notif_fd) {
     if (strcmp(keyNode->key, key) == 0) {
       for (int i = 0; i < MAX_SESSION_COUNT; i++) {
         if (keyNode->subs[i] == client_notif_fd) {
-          keyNode->subs[i] = NULL;
+          pthread_rwlock_unlock(&kvs_table->tablelock);
+          pthread_rwlock_wrlock(&kvs_table->tablelock);
+          keyNode->subs[i] = -1;
           pthread_rwlock_unlock(&kvs_table->tablelock);
           return 0;
         }
@@ -245,13 +250,15 @@ int subscribe_client_key(const char *key, int client_notif_fd) {
 
   int index = hash(key);
 
-  pthread_rwlock_wrlock(&kvs_table->tablelock);
+  pthread_rwlock_rdlock(&kvs_table->tablelock);
 
   KeyNode *keyNode = kvs_table->table[index];
   while (keyNode != NULL) {
     if (strcmp(keyNode->key, key) == 0) {
       for (int i = 0; i < MAX_SESSION_COUNT; i++) {
-        if (keyNode->subs[i] == NULL) {
+        if (keyNode->subs[i] == -1) {
+          pthread_rwlock_unlock(&kvs_table->tablelock);
+          pthread_rwlock_wrlock(&kvs_table->tablelock);
           keyNode->subs[i] = client_notif_fd; 
           pthread_rwlock_unlock(&kvs_table->tablelock);
           return 0;
@@ -260,7 +267,6 @@ int subscribe_client_key(const char *key, int client_notif_fd) {
     }
     keyNode = keyNode->next; // Move to the next node
   }
-
   pthread_rwlock_unlock(&kvs_table->tablelock);
   return 1;
 }

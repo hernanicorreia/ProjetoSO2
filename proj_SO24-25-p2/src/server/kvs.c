@@ -2,8 +2,10 @@
 
 #include <ctype.h>
 #include <stdlib.h>
+#include <stdio.h> 
 
 #include "string.h"
+#include "src/common/io.h"
 
 // Hash function based on key initial.
 // @param key Lowercase alphabetical string.
@@ -35,7 +37,6 @@ struct HashTable *create_hash_table() {
 int write_pair(HashTable *ht, const char *key, const char *value) {
   int index = hash(key);
 
-  pthread_rwlock_wrlock(&ht->tablelock);
 
   // Search for the key node
   KeyNode *keyNode = ht->table[index];
@@ -49,37 +50,49 @@ int write_pair(HashTable *ht, const char *key, const char *value) {
       // overwrite value
       free(keyNode->value);
       keyNode->value = strdup(value);
-      notify_clients_key_altered(ht, key);
+      pthread_rwlock_rdlock(&ht->tablelock);
+      notify_clients_key_altered(ht, key, 0);
       pthread_rwlock_unlock(&ht->tablelock);
       return 0 ;
     }
     previousNode = keyNode;
     keyNode = previousNode->next; // Move to the next node
   }
-  pthread_rwlock_unlock(&ht->tablelock);
 
   // Key not found, create a new key node
   keyNode = malloc(sizeof(KeyNode));
-  keyNode->subs[0] = NULL;
+  memset(keyNode->subs, -1, MAX_SESSION_COUNT * sizeof(int));
   keyNode->key = strdup(key);       // Allocate memory for the key
   keyNode->value = strdup(value);   // Allocate memory for the value
   keyNode->next = ht->table[index]; // Link to existing nodes
   ht->table[index] = keyNode; // Place new key node at the start of the list
+  printf("key: %s value: %s\n", keyNode->key, keyNode->value);
 
   return 0;
 }
 
-void notify_clients_key_altered(HashTable* ht, char *key) {
+void notify_clients_key_altered(HashTable* ht, const char *key, int flag) {
     for(int i = 0; i < MAX_SESSION_COUNT; i++){
-        if(key->subs[i] != NULL){
-            char* notif = malloc(MAX_STRING_SIZE);
-            char* value = read_pair(ht, key);
-            if(value == NULL)
+      KeyNode* node = ht->table[hash(key)];
+      KeyNode* previousNode;
+      while(node != NULL){
+        if(node->key == key){
+          break;
+        }
+        previousNode = node;
+        node = node->next;
+      }
+        node = previousNode;
+        if(node->subs[i] != -1){
+            char notif[MAX_STRING_SIZE];
+            if(flag == 1)
               sprintf(notif, "(%s,DELETED)", key);
-            else
+            else{
+              char* value = read_pair(ht, key);
               sprintf(notif, "(%s,%s)", key, value );
-            if(write_all(key->subs[i], notif, MAX_STRING_SIZE) == -1){
-              key->subs[i] = NULL;
+              }
+            if(write_all(node->subs[i], notif, MAX_STRING_SIZE) == -1){
+              node->subs[i] = -1;
               //notify thread to get new client or not i guess
             }	
         }
@@ -108,6 +121,7 @@ char *read_pair(HashTable *ht, const char *key) {
 int delete_pair(HashTable *ht, const char *key) {
   int index = hash(key);
 
+  notify_clients_key_altered(ht, key, 1);
   // Search for the key node
   KeyNode *keyNode = ht->table[index];
   KeyNode *prevNode = NULL;

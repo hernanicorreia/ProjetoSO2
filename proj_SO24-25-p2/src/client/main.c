@@ -10,6 +10,19 @@
 #include "src/common/constants.h"
 #include "src/common/io.h"
 
+void* read_notif(void* arguments){
+
+  char buffer[MAX_STRING_SIZE];
+  int fd = *(int*)arguments;
+  while(1){
+    read_all(fd, buffer, MAX_STRING_SIZE, NULL);
+    if(buffer[0] != '\0'){
+      printf("%s\n" , buffer);
+    }
+  }
+}
+
+
 int main(int argc, char *argv[]) {
   if (argc < 3) {
     fprintf(stderr, "Usage: %s <client_unique_id> <register_pipe_path>\n",
@@ -29,11 +42,12 @@ int main(int argc, char *argv[]) {
   strncat(resp_pipe_path, argv[1], strlen(argv[1]) * sizeof(char));
   strncat(notif_pipe_path, argv[1], strlen(argv[1]) * sizeof(char));
 
-  kvs_connect(req_pipe_path, resp_pipe_path, argv[2], notif_pipe_path);
+  int* notif = malloc(sizeof(int));
+  *notif = kvs_connect(req_pipe_path, resp_pipe_path, argv[2], notif_pipe_path);
 
 
-  int flag = 0;
-
+  pthread_t thread_id;
+  pthread_create(&thread_id, NULL, read_notif, notif);
   while (1) {
     switch (get_next(STDIN_FILENO)) {
     case CMD_DISCONNECT:
@@ -42,7 +56,6 @@ int main(int argc, char *argv[]) {
         return 1;
       }
       // TODO: end notifications thread
-      printf("Disconnected from server\n");
       return 0;
 
     case CMD_SUBSCRIBE:
@@ -55,7 +68,6 @@ int main(int argc, char *argv[]) {
       if (kvs_subscribe(keys[0])) {
         fprintf(stderr, "Command subscribe failed\n");
       }
-      flag = 1;
       break;
 
     case CMD_UNSUBSCRIBE:
@@ -64,7 +76,6 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Invalid command. See HELP for usage\n");
         continue;
       }
-      flag = 1;
       if (kvs_unsubscribe(keys[0])) {
         fprintf(stderr, "Command subscribe failed\n");
       }
@@ -94,10 +105,7 @@ int main(int argc, char *argv[]) {
       // input should end in a disconnect, or it will loop here forever
       break;
     }
-    if(flag){
-      await_response();
-      flag = 0;
-      continue;
-    }
+
+  
   }
 }
